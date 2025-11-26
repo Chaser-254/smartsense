@@ -2,14 +2,14 @@
 
 A full-stack application with React/TypeScript frontend and Node.js backend that detects disease in crops using AI and offers insights and recommndations on what pesticide to use .
 
-## 🚀 Features
+## Features
 
 - Modern React frontend with TypeScript
 - Node.js backend with Express
 - Secure authentication
 - Responsive design
 
-## 📦 Prerequisites
+## Prerequisites
 
 - Node.js (v16 or later)
 - npm or yarn
@@ -48,6 +48,6 @@ A full-stack application with React/TypeScript frontend and Node.js backend that
     Frontend: React, TypeScript and Tailwind
     Backend: Node.js, Express
     Database: MongoDB
-    Other: Gemini (Google AI) and OpenAI APIs
+    Other: Gemini (Google AI) and OpenAI APIs for crop disease detection and pesticide recommendations
 6. License
     This project is licensed under the MIT License - see the LICENSE file for details.
