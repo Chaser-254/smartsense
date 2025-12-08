@@ -1,5 +1,5 @@
 // API service for backend communication to the frontend
-const API_BASE_URL = 'http://localhost:3002';
+const API_BASE_URL = 'http://localhost:3001';
 
 export interface AuthResponse {
   success: boolean;
