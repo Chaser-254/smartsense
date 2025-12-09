@@ -3,7 +3,6 @@ import { useAuth } from '../contexts/AuthContext';
 import { Camera, Upload, AlertCircle, CheckCircle, Droplets, DollarSign, Shield, Loader2 } from 'lucide-react';
 import { detectDisease } from '../lib/api';
 import { calculateTotalCost } from '../lib/pesticides';
-import AIProviderSelector from '../components/AIProviderSelector';
 
 interface DetailedScanResult {
   diseaseDetected: boolean;
@@ -20,44 +19,30 @@ interface DetailedScanResult {
 export default function ScanPage() {
   console.log('ScanPage component rendering');
   const { token } = useAuth();
-  const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [cropType, setCropType] = useState('');
-  const [aiProvider, setAiProvider] = useState('huggingface');
+  const [selectedImage, setSelectedImage] = useState<File | null>(null);
   const [scanning, setScanning] = useState(false);
   const [result, setResult] = useState<DetailedScanResult | null>(null);
   const [error, setError] = useState('');
 
-  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      if (file.size > 10 * 1024 * 1024) {
-        setError('Image must be less than 10MB');
-        return;
-      }
+  // Image upload UI restored for future use (no image data is sent to the backend)
 
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setSelectedImage(reader.result as string);
-        setResult(null);
-        setError('');
-      };
-      reader.readAsDataURL(file);
+  const handleImageChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (event.target.files && event.target.files[0]) {
+      setSelectedImage(event.target.files[0]);
     }
   };
 
   const handleScan = async () => {
-    console.log('handleScan called, selectedImage:', !!selectedImage, 'cropType:', cropType);
-    if (!selectedImage || !cropType.trim()) return;
+    console.log('handleScan called, selectedImage present:', !!selectedImage, 'cropType:', cropType);
+    if (!cropType.trim()) return;
 
     setScanning(true);
     setError('');
 
     try {
-      const imageBase64 = selectedImage.split(',')[1];
-      console.log('Extracted base64, length:', imageBase64.length);
-      
-      // Call backend API for disease detection
-      const detectionResult = await detectDisease(imageBase64, token || undefined, aiProvider);
+      // Call backend API for disease detection (DB-driven)
+      const detectionResult = await detectDisease(cropType.trim(), token || undefined);
       console.log('Detection result:', detectionResult);
       
       // Create result for display
@@ -87,7 +72,7 @@ export default function ScanPage() {
   };
 
   const handleNewScan = () => {
-    setSelectedImage(null);
+    if (selectedImage) setSelectedImage(null);
     setCropType('');
     setResult(null);
     setError('');
@@ -280,16 +265,11 @@ export default function ScanPage() {
   return (
     <div className="max-w-2xl mx-auto space-y-6">
       <div>
-        <h2 className="text-2xl font-bold text-gray-800 mb-1">Scan Crop</h2>
-        <p className="text-gray-600">Upload or capture an image to detect diseases and get pesticide recommendations</p>
-      </div>
+            <h2 className="text-2xl font-bold text-gray-800 mb-1">Scan Crop</h2>
+            <p className="text-gray-600">You can optionally upload an image for future AI features. Current detection uses the crop name only.</p>
+          </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 space-y-6">
-        <AIProviderSelector 
-          selectedProvider={aiProvider} 
-          onProviderChange={setAiProvider} 
-        />
-        
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-2">
             Crop Type
@@ -303,39 +283,41 @@ export default function ScanPage() {
           />
         </div>
 
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Upload Image
-          </label>
-
-          {!selectedImage ? (
-            <label className="block border-2 border-dashed border-gray-300 rounded-xl p-12 text-center cursor-pointer hover:border-green-500 transition">
-              <input
-                type="file"
-                accept="image/*"
-                onChange={handleImageSelect}
-                className="hidden"
-              />
-              <Camera className="w-12 h-12 text-gray-400 mx-auto mb-3" />
-              <p className="text-gray-600 font-medium mb-1">Click to upload or capture</p>
-              <p className="text-sm text-gray-500">PNG, JPG up to 10MB</p>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Upload Image (Future AI Feature)
             </label>
-          ) : (
-            <div className="space-y-4">
-              <img
-                src={selectedImage}
-                alt="Selected crop"
-                className="w-full h-64 object-cover rounded-lg"
-              />
-              <button
-                onClick={() => setSelectedImage(null)}
-                className="w-full py-2 text-gray-600 hover:text-gray-800 transition"
-              >
-                Choose Different Image
-              </button>
-            </div>
-          )}
-        </div>
+
+            {!selectedImage ? (
+              <label className="block border-2 border-dashed border-gray-300 rounded-xl p-6 text-center cursor-pointer hover:border-green-500 transition">
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={handleImageChange}
+                  className="hidden"
+                />
+                <Camera className="w-10 h-10 text-gray-400 mx-auto mb-2" />
+                <p className="text-gray-600 font-medium mb-1">Upload a picture of the infected crop (Future AI Feature)</p>
+                <p className="text-sm text-gray-500">PNG, JPG — image is optional and not sent to the server</p>
+              </label>
+            ) : (
+              <div className="space-y-4">
+                <img
+                  src={URL.createObjectURL(selectedImage)}
+                  alt="Selected crop"
+                  className="w-full h-64 object-cover rounded-lg"
+                />
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setSelectedImage(null)}
+                    className="flex-1 py-2 text-gray-600 hover:text-gray-800 transition"
+                  >
+                    Choose Different Image
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
 
         {error && (
           <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
@@ -345,7 +327,7 @@ export default function ScanPage() {
 
         <button
           onClick={handleScan}
-          disabled={!selectedImage || !cropType.trim() || scanning}
+          disabled={!cropType.trim() || scanning}
           className="w-full bg-green-500 hover:bg-green-600 text-white font-semibold py-4 rounded-lg transition duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
         >
           {scanning ? (

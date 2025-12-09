@@ -1,13 +1,11 @@
 const express = require('express');
 const cors = require('cors');
-const axios = require('axios');
 const cheerio = require('cheerio');
-const FormData = require('form-data');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { createClient } = require('@supabase/supabase-js');
-const { detectDiseaseWithGemini } = require('./gemini-detection');
-const { detectDiseaseWithOpenAI } = require('./openai-detection');
+// AI detection modules are deprecated and replaced with DB-driven detection.
+// See DEPRECATED_gemini-detection.js and DEPRECATED_openai-detection.js for archived code.
 require('dotenv').config();
 
 const app = express();
@@ -20,7 +18,8 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 // Middleware
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '100kb' }));
+app.use(express.urlencoded({ limit: '100kb', extended: true }));
 
 // Routes
 app.get('/', (req, res) => {
@@ -303,136 +302,94 @@ app.put('/api/user/profile', async (req, res) => {
 app.post('/api/detect-disease', async (req, res) => {
   try {
     const token = req.headers.authorization?.split(' ')[1];
-    const { imageBase64, aiProvider = 'huggingface' } = req.body;
-    
-    if (!imageBase64) {
-      return res.status(400).json({
-        success: false,
-        error: 'Image data is required'
-      });
+    const { cropName } = req.body;
+
+    if (!cropName || typeof cropName !== 'string' || !cropName.trim()) {
+      return res.status(400).json({ success: false, error: 'cropName is required in request body' });
     }
 
     let userId = null;
     if (token) {
-      try {
-        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'fallback-secret');
-        userId = decoded.userId;
-      } catch (error) {
-        // Token invalid, continue without user tracking
-      }
+      try { const decoded = jwt.verify(token, process.env.JWT_SECRET || 'fallback-secret'); userId = decoded.userId; } catch (e) { /* ignore invalid token */ }
     }
 
-    let detectionResult;
+    // Database-driven detection: infer most-likely disease from historical scan_results for the crop
+    let diseaseName = 'Unknown';
+    let confidence = 50; // default confidence when insufficient data
+    let description = `Insufficient historical data for ${cropName}`;
+    let pesticideRecommendations = [];
 
-    // Use different AI providers based on selection
-    switch (aiProvider.toLowerCase()) {
-      case 'gemini':
-        detectionResult = await detectDiseaseWithGemini(imageBase64);
-        break;
-      case 'openai':
-        detectionResult = await detectDiseaseWithOpenAI(imageBase64);
-        break;
-      case 'huggingface':
-      default:
-        const imageBuffer = Buffer.from(imageBase64, 'base64');
-        const formData = new FormData();
-        formData.append('image', imageBuffer, 'plant.jpg');
+    try {
+      const { data: pastScans, error: pastError } = await supabase
+        .from('scan_results')
+        .select('detected_disease, confidence_score')
+        .ilike('crop_name', cropName)
+        .limit(1000);
 
-        const response = await axios.post(
-          'https://api-inference.huggingface.co/models/Intel/plant-disease-detection',
-          formData,
-          {
-            headers: {
-              ...formData.getHeaders(),
-              'Authorization': `Bearer ${process.env.HUGGINGFACE_API_KEY}`
-            }
-          }
-        );
+      if (pastError) {
+        console.error('Error fetching past scans:', pastError);
+      }
 
-        const predictions = response.data;
-        if (!predictions || predictions.length === 0) {
-          return res.status(404).json({
-            success: false,
-            error: 'No disease detected'
-          });
+      if (Array.isArray(pastScans) && pastScans.length > 0) {
+        const freq = {};
+        for (const s of pastScans) {
+          const d = s.detected_disease || 'Unknown';
+          freq[d] = (freq[d] || 0) + 1;
         }
 
-        const topPrediction = predictions[0];
-        detectionResult = {
-          disease: topPrediction.label || "Unknown Disease",
-          confidence: topPrediction.score || 0.5,
-          description: `Detected ${topPrediction.label || "Unknown Disease"} with ${Math.round((topPrediction.score || 0.5) * 100)}% confidence`
-        };
-        break;
+        const ranked = Object.entries(freq).sort((a, b) => b[1] - a[1]);
+        diseaseName = ranked[0][0];
+        const count = ranked[0][1];
+        const total = pastScans.length;
+        confidence = Math.round((count / total) * 100);
+        description = `Most likely disease for ${cropName} based on historical scans`;
+      } else {
+        // No historical scans for this crop; leave defaults
+        diseaseName = 'Unknown';
+        confidence = 50;
+        description = `No historical data for ${cropName}`;
+      }
+    } catch (err) {
+      console.error('DB-driven detection error:', err);
     }
 
-    const diseaseName = detectionResult.disease;
-    const confidence = Math.round(detectionResult.confidence * 100);
+    pesticideRecommendations = await getPesticideRecommendations(diseaseName);
 
-    // Get pesticide recommendations
-    const pesticideRecommendations = await getPesticideRecommendations(diseaseName);
+    // Insert the scan result (record cropName instead of image URL)
+    try {
+      await supabase.from('scan_results').insert([{
+        user_id: userId,
+        crop_name: cropName,
+        detected_disease: diseaseName,
+        confidence_score: confidence,
+        description,
+        recommendations: pesticideRecommendations,
+        pesticides: pesticideRecommendations
+      }]);
+    } catch (err) {
+      console.error('Error inserting scan_result:', err);
+    }
 
     // Update user statistics if authenticated
     if (userId) {
-      const { data: user } = await supabase
-        .from('users')
-        .select('statistics')
-        .eq('id', userId)
-        .single();
+      try {
+        const { data: user } = await supabase.from('users').select('statistics').eq('id', userId).single();
+        const stats = user?.statistics || { totalScans: 0, successfulDetections: 0, lastScanDate: null, favoriteCrops: [] };
+        stats.totalScans = (stats.totalScans || 0) + 1;
+        if (diseaseName && diseaseName !== 'Unknown') stats.successfulDetections = (stats.successfulDetections || 0) + 1;
+        stats.lastScanDate = new Date().toISOString();
+        await supabase.from('users').update({ statistics: stats, updated_at: new Date().toISOString() }).eq('id', userId);
 
-      const stats = user.statistics;
-      stats.totalScans += 1;
-      stats.successfulDetections += 1;
-      stats.lastScanDate = new Date().toISOString();
-
-      await supabase
-        .from('users')
-        .update({ 
-          statistics: stats,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', userId);
-
-      // Log detection activity
-      await supabase
-        .from('user_activities')
-        .insert([{
-          user_id: userId,
-          action: 'disease_detection',
-          details: {
-            disease: diseaseName,
-            confidence: confidence,
-            timestamp: new Date().toISOString()
-          }
-        }]);
-
-      // Store scan result
-      await supabase
-        .from('scan_results')
-        .insert([{
-          user_id: userId,
-          detected_disease: diseaseName,
-          confidence_score: confidence,
-          description: detectionResult.description,
-          recommendations: detectionResult.recommendations || [],
-          pesticides: pesticideRecommendations
-        }]);
+        await supabase.from('user_activities').insert([{ user_id: userId, action: 'disease_detection', details: { disease: diseaseName, confidence, timestamp: new Date().toISOString() } }]);
+      } catch (err) {
+        console.error('Error updating user statistics:', err);
+      }
     }
 
-    res.json({
-      success: true,
-      disease: diseaseName,
-      confidence: confidence,
-      description: detectionResult.description || `Detected ${diseaseName} with ${confidence}% confidence`,
-      pesticides: pesticideRecommendations
-    });
-
+    return res.json({ success: true, disease: diseaseName, confidence, description, pesticides: pesticideRecommendations });
   } catch (error) {
     console.error('Disease detection error:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: error.message 
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 

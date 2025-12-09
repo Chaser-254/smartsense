@@ -56,26 +56,18 @@ export const signIn = async (email: string, password: string): Promise<AuthRespo
 };
 
 // Disease detection API call
-export async function detectDisease(imageBase64: string, token?: string, aiProvider?: string): Promise<DetectionResult> {
+export async function detectDisease(cropName: string, token?: string): Promise<DetectionResult> {
   try {
-    const headers: HeadersInit = {
-      'Content-Type': 'application/json',
-    };
-
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
+    const headers: HeadersInit = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
 
     const response = await fetch(`${API_BASE_URL}/api/detect-disease`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ imageBase64, aiProvider }),
+      body: JSON.stringify({ cropName }),
     });
 
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-
+    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
     const data = await response.json();
     return data;
   } catch (error) {
